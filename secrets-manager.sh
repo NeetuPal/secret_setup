@@ -5,10 +5,7 @@
 
 set -euo pipefail
 
-CREATED_BY="$(whoami)"
-
-# ---------------- FUNCTIONS ----------------
-
+# Function: create or update SSM Parameter
 create_parameter() {
   local name="$1"
   local value="$2"
@@ -29,7 +26,7 @@ create_parameter() {
     aws ssm add-tags-to-resource \
       --resource-type "Parameter" \
       --resource-id "$name" \
-      --tags "Key=CreatedBy,Value=$CREATED_BY" \
+      --tags "Key=CreatedBy,Value=$(whoami)" \
              "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   else
@@ -38,11 +35,12 @@ create_parameter() {
       --name "$name" \
       --value "$value" \
       --type String \
-      --tags "Key=CreatedBy,Value=$CREATED_BY" \
+      --tags "Key=CreatedBy,Value=$(whoami)" \
              "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   fi
 }
 
+# Function: create a Secret in AWS Secrets Manager
 create_secret() {
   local name="$1"
   local value="$2"
@@ -51,7 +49,7 @@ create_secret() {
   aws secretsmanager create-secret \
     --name "$name" \
     --secret-string "$value" \
-    --tags "Key=CreatedBy,Value=$CREATED_BY" \
+    --tags "Key=CreatedBy,Value=$(whoami)" \
            "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     --query "{ARN:ARN,Name:Name}" --output json || {
       echo "[WARN] Secret $name may already exist. Updating instead..."
@@ -62,6 +60,7 @@ create_secret() {
   }
 }
 
+# Function: delete secret safely
 delete_secret() {
   local name="$1"
   echo "[INFO] Deleting secret $name..."
@@ -75,6 +74,7 @@ delete_secret() {
   fi
 }
 
+# Function: delete parameter safely
 delete_parameter() {
   local name="$1"
   echo "[INFO] Deleting parameter $name..."
@@ -86,28 +86,29 @@ delete_parameter() {
   fi
 }
 
+# Function: list resources created by this script
 list_resources() {
-  echo "[INFO] Listing all AWS resources created by: $CREATED_BY"
+  echo "[INFO] Listing AWS resources tagged with CreatedBy=$(whoami)..."
 
-  echo "🔑 Secrets Manager:"
+  echo "🔹 Secrets Manager:"
   aws secretsmanager list-secrets \
-    --query "SecretList[?Tags[?Key=='CreatedBy' && Value=='$CREATED_BY']].[Name,ARN]" \
-    --output table || echo "[INFO] No secrets found."
+    --query "SecretList[?Tags[?Key=='CreatedBy' && Value=='$(whoami)']].[Name,ARN]" \
+    --output table || echo "[WARN] No secrets found."
 
   echo ""
-  echo "📦 SSM Parameters:"
+  echo "🔹 SSM Parameters:"
   aws ssm describe-parameters \
-    --query "Parameters[?Tags[?Key=='CreatedBy' && Value=='$CREATED_BY']].[Name,Type]" \
-    --output table || echo "[INFO] No parameters found."
+    --query "Parameters[?Tags[?Key=='CreatedBy' && Value=='$(whoami)']].[Name]" \
+    --output table || echo "[WARN] No parameters found."
 }
 
-# ---------------- MAIN MENU ----------------
+# ------------------ MAIN MENU ------------------
 main() {
   echo "What do you want to do?"
   echo "1) Create"
   echo "2) Delete"
-  echo "3) List"
-  echo "4) Exit"
+  echo "3) Exit"
+  echo "4) List"
   read -rp "#? " choice
 
   secret_aws_key="prod/aws/secret-key"
@@ -145,4 +146,23 @@ main() {
       echo "  - Secret: $secret_aws_key"
       echo "  - Parameter: $param_access_key"
       echo "  - Secret: $pem_secret"
-      read -rp "⚠️  Are you sure you want to
+      read -rp "⚠️  Are you sure you want to delete these? (y/N): " confirm
+      if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        delete_secret "$secret_aws_key"
+        delete_parameter "$param_access_key"
+        delete_secret "$pem_secret"
+        echo "[INFO] ✅ Deletion complete."
+      else
+        echo "[INFO] ❌ Deletion canceled."
+      fi
+      ;;
+
+    3) echo "Bye!"; exit 0 ;;
+
+    4) list_resources ;;
+
+    *) echo "[ERROR] Invalid choice."; exit 1 ;;
+  esac
+}
+
+main "$@"
