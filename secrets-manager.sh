@@ -129,8 +129,15 @@ main() {
 
       read -rp "Enter the secret name for the PEM file [default: $pem_secret]: " input
       pem_secret="${input:-$pem_secret}"
-      read -rp "Enter value for $pem_secret [default: dummy-pem-content]: " input
-      pem_secret_value="${input:-dummy-pem-content}"
+      read -rp "Enter path to PEM file [default: ./test.pem]: " input
+      pem_file="${input:-./test.pem}"
+
+      if [[ -f "$pem_file" ]]; then
+        pem_secret_value=$(<"$pem_file")
+      else
+        echo "[WARNING] File not found: $pem_file, using dummy value"
+        pem_secret_value="dummy-pem-content"
+      fi
 
       echo "[INFO] Creating AWS secrets and parameters with tags..."
       create_secret "$secret_aws_key" "$secret_aws_value"
