@@ -1,135 +1,148 @@
 #!/bin/bash
-# Script to create or delete AWS Secrets Manager and Parameter Store entries with tags (interactive)
+# secrets-manager.sh
+# Manage AWS Secrets Manager and SSM Parameters
+# Tags: CreatedBy=$(whoami), CreatedAt=<UTC timestamp>
 
-set -e
+set -euo pipefail
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+CREATED_BY="$(whoami)"
 
-print_status()   { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warning()  { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error()    { echo -e "${RED}[ERROR]${NC} $1"; }
+# ---------------- FUNCTIONS ----------------
 
-# Check AWS CLI
-if ! command -v aws &>/dev/null; then
-    print_error "AWS CLI not installed."
-    exit 1
-fi
+create_parameter() {
+  local name="$1"
+  local value="$2"
 
-if ! aws sts get-caller-identity &>/dev/null; then
-    print_error "AWS credentials not configured. Run 'aws configure'."
-    exit 1
-fi
+  echo "[INFO] Checking if parameter $name exists..."
+  if aws ssm describe-parameters \
+      --parameter-filters "Key=Name,Values=$name" \
+      --query "Parameters" --output text | grep -q "$name"; then
 
-# Prompt user for action
-echo "What do you want to do?"
-select ACTION in "Create" "Delete" "Exit"; do
-    case $ACTION in
-        Create|Delete) break ;;
-        Exit) exit 0 ;;
-        *) echo "Invalid choice, try again." ;;
-    esac
-done
-
-# Ask for names (with defaults)
-read -p "Enter the secret name for the AWS Secret Key [default: prod/aws/secret-key]: " SECRET_KEY_SECRET_NAME
-read -p "Enter the parameter name for the AWS Access Key [default: /prod/aws/access-key-id]: " ACCESS_KEY_PARAMETER
-read -p "Enter the secret name for the PEM file [default: prod/ec2/keypair/my-key]: " PEM_SECRET_NAME
-
-# Apply defaults if empty
-SECRET_KEY_SECRET_NAME=${SECRET_KEY_SECRET_NAME:-"prod/aws/secret-key"}
-ACCESS_KEY_PARAMETER=${ACCESS_KEY_PARAMETER:-"/prod/aws/access-key-id"}
-PEM_SECRET_NAME=${PEM_SECRET_NAME:-"prod/ec2/keypair/my-key"}
-
-# Tags
-USER_TAG=$(whoami)
-DATE_TAG=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-# --- CREATE ---
-create_resources() {
-    print_status "Creating AWS secrets and parameters with tags..."
-
-    aws secretsmanager create-secret \
-        --name "$SECRET_KEY_SECRET_NAME" \
-        --secret-string "dummy-secret-key" \
-        --tags Key=CreatedBy,Value="$USER_TAG" Key=CreatedAt,Value="$DATE_TAG" \
-        --no-cli-pager || print_warning "Secret already exists: $SECRET_KEY_SECRET_NAME"
-
+    echo "[INFO] Parameter already exists, updating value..."
     aws ssm put-parameter \
-        --name "$ACCESS_KEY_PARAMETER" \
-        --value "dummy-access-key" \
-        --type SecureString \
-        --tags Key=CreatedBy,Value="$USER_TAG" Key=CreatedAt,Value="$DATE_TAG" \
-        --overwrite \
-        --no-cli-pager
+      --name "$name" \
+      --value "$value" \
+      --type String \
+      --overwrite >/dev/null
 
-    aws secretsmanager create-secret \
-        --name "$PEM_SECRET_NAME" \
-        --secret-string "dummy-pem-content" \
-        --tags Key=CreatedBy,Value="$USER_TAG" Key=CreatedAt,Value="$DATE_TAG" \
-        --no-cli-pager || print_warning "Secret already exists: $PEM_SECRET_NAME"
+    echo "[INFO] Updating tags for parameter $name..."
+    aws ssm add-tags-to-resource \
+      --resource-type "Parameter" \
+      --resource-id "$name" \
+      --tags "Key=CreatedBy,Value=$CREATED_BY" \
+             "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-    print_status "✅ Creation complete."
+  else
+    echo "[INFO] Creating new parameter $name with tags..."
+    aws ssm put-parameter \
+      --name "$name" \
+      --value "$value" \
+      --type String \
+      --tags "Key=CreatedBy,Value=$CREATED_BY" \
+             "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  fi
 }
 
-# --- DELETE ---
-delete_resources() {
-    print_status "You are about to delete:"
-    echo "  - Secret: $SECRET_KEY_SECRET_NAME"
-    echo "  - Parameter: $ACCESS_KEY_PARAMETER"
-    echo "  - Secret: $PEM_SECRET_NAME"
-    echo
-    read -p "⚠️  Are you sure you want to delete these? (y/N): " CONFIRM
+create_secret() {
+  local name="$1"
+  local value="$2"
 
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        print_warning "Operation cancelled."
-        exit 0
-    fi
-
-    if aws secretsmanager describe-secret --secret-id "$SECRET_KEY_SECRET_NAME" &>/dev/null; then
-        aws secretsmanager tag-resource \
-            --secret-id "$SECRET_KEY_SECRET_NAME" \
-            --tags Key=DeletedBy,Value="$USER_TAG" Key=DeletedAt,Value="$DATE_TAG"
-        aws secretsmanager delete-secret \
-            --secret-id "$SECRET_KEY_SECRET_NAME" \
-            --force-delete-without-recovery \
-            --no-cli-pager
-        print_status "Deleted secret: $SECRET_KEY_SECRET_NAME"
-    else
-        print_warning "Secret not found: $SECRET_KEY_SECRET_NAME"
-    fi
-
-    if aws ssm get-parameter --name "$ACCESS_KEY_PARAMETER" &>/dev/null; then
-        aws ssm delete-parameter \
-            --name "$ACCESS_KEY_PARAMETER" \
-            --no-cli-pager
-        print_status "Deleted parameter: $ACCESS_KEY_PARAMETER (DeletedBy=$USER_TAG, DeletedAt=$DATE_TAG)"
-    else
-        print_warning "Parameter not found: $ACCESS_KEY_PARAMETER"
-    fi
-
-    if aws secretsmanager describe-secret --secret-id "$PEM_SECRET_NAME" &>/dev/null; then
-        aws secretsmanager tag-resource \
-            --secret-id "$PEM_SECRET_NAME" \
-            --tags Key=DeletedBy,Value="$USER_TAG" Key=DeletedAt,Value="$DATE_TAG"
-        aws secretsmanager delete-secret \
-            --secret-id "$PEM_SECRET_NAME" \
-            --force-delete-without-recovery \
-            --no-cli-pager
-        print_status "Deleted secret: $PEM_SECRET_NAME"
-    else
-        print_warning "Secret not found: $PEM_SECRET_NAME"
-    fi
-
-    print_status "✅ Deletion complete."
+  echo "[INFO] Creating secret $name..."
+  aws secretsmanager create-secret \
+    --name "$name" \
+    --secret-string "$value" \
+    --tags "Key=CreatedBy,Value=$CREATED_BY" \
+           "Key=CreatedAt,Value=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --query "{ARN:ARN,Name:Name}" --output json || {
+      echo "[WARN] Secret $name may already exist. Updating instead..."
+      aws secretsmanager put-secret-value \
+        --secret-id "$name" \
+        --secret-string "$value" \
+        --query "{ARN:ARN,Name:Name}" --output json
+  }
 }
 
-# --- Execute ---
-if [[ "$ACTION" == "Create" ]]; then
-    create_resources
-elif [[ "$ACTION" == "Delete" ]]; then
-    delete_resources
-fi
+delete_secret() {
+  local name="$1"
+  echo "[INFO] Deleting secret $name..."
+  if aws secretsmanager describe-secret --secret-id "$name" >/dev/null 2>&1; then
+    aws secretsmanager delete-secret \
+      --secret-id "$name" \
+      --force-delete-without-recovery \
+      --query "{ARN:ARN,Name:Name,DeletionDate:DeletionDate}" --output json
+  else
+    echo "[WARNING] Secret not found: $name"
+  fi
+}
+
+delete_parameter() {
+  local name="$1"
+  echo "[INFO] Deleting parameter $name..."
+  if aws ssm get-parameter --name "$name" >/dev/null 2>&1; then
+    aws ssm delete-parameter --name "$name"
+    echo "[INFO] Deleted parameter: $name"
+  else
+    echo "[WARNING] Parameter not found: $name"
+  fi
+}
+
+list_resources() {
+  echo "[INFO] Listing all AWS resources created by: $CREATED_BY"
+
+  echo "🔑 Secrets Manager:"
+  aws secretsmanager list-secrets \
+    --query "SecretList[?Tags[?Key=='CreatedBy' && Value=='$CREATED_BY']].[Name,ARN]" \
+    --output table || echo "[INFO] No secrets found."
+
+  echo ""
+  echo "📦 SSM Parameters:"
+  aws ssm describe-parameters \
+    --query "Parameters[?Tags[?Key=='CreatedBy' && Value=='$CREATED_BY']].[Name,Type]" \
+    --output table || echo "[INFO] No parameters found."
+}
+
+# ---------------- MAIN MENU ----------------
+main() {
+  echo "What do you want to do?"
+  echo "1) Create"
+  echo "2) Delete"
+  echo "3) List"
+  echo "4) Exit"
+  read -rp "#? " choice
+
+  secret_aws_key="prod/aws/secret-key"
+  param_access_key="/prod/aws/access-key-id"
+  pem_secret="prod/ec2/keypair/my-key"
+
+  case "$choice" in
+    1)
+      read -rp "Enter the secret name for the AWS Secret Key [default: $secret_aws_key]: " input
+      secret_aws_key="${input:-$secret_aws_key}"
+
+      read -rp "Enter the parameter name for the AWS Access Key [default: $param_access_key]: " input
+      param_access_key="${input:-$param_access_key}"
+
+      read -rp "Enter the secret name for the PEM file [default: $pem_secret]: " input
+      pem_secret="${input:-$pem_secret}"
+
+      echo "[INFO] Creating AWS secrets and parameters with tags..."
+      create_secret "$secret_aws_key" "dummy-secret-value"
+      create_parameter "$param_access_key" "dummy-access-key"
+      create_secret "$pem_secret" "dummy-pem-content"
+      ;;
+
+    2)
+      read -rp "Enter the secret name for the AWS Secret Key [default: $secret_aws_key]: " input
+      secret_aws_key="${input:-$secret_aws_key}"
+
+      read -rp "Enter the parameter name for the AWS Access Key [default: $param_access_key]: " input
+      param_access_key="${input:-$param_access_key}"
+
+      read -rp "Enter the secret name for the PEM file [default: $pem_secret]: " input
+      pem_secret="${input:-$pem_secret}"
+
+      echo "[INFO] You are about to delete:"
+      echo "  - Secret: $secret_aws_key"
+      echo "  - Parameter: $param_access_key"
+      echo "  - Secret: $pem_secret"
+      read -rp "⚠️  Are you sure you want to
