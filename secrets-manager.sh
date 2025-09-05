@@ -130,7 +130,7 @@ main() {
       read -rp "Enter the secret name for the PEM file [default: $pem_secret]: " input
       pem_secret="${input:-$pem_secret}"
       read -rp "Enter path to PEM file [default: ./keypair.pem]: " input
-      pem_file="${input:-./test.pem}"
+      pem_file="${input:-./keypair.pem}"
 
       if [[ -f "$pem_file" ]]; then
         pem_secret_value=$(<"$pem_file")
