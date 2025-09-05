@@ -119,17 +119,23 @@ main() {
     1)
       read -rp "Enter the secret name for the AWS Secret Key [default: $secret_aws_key]: " input
       secret_aws_key="${input:-$secret_aws_key}"
+      read -rp "Enter value for $secret_aws_key [default: dummy-secret-value]: " input
+      secret_aws_value="${input:-dummy-secret-value}"
 
       read -rp "Enter the parameter name for the AWS Access Key [default: $param_access_key]: " input
       param_access_key="${input:-$param_access_key}"
+      read -rp "Enter value for $param_access_key [default: dummy-access-key]: " input
+      param_access_value="${input:-dummy-access-key}"
 
       read -rp "Enter the secret name for the PEM file [default: $pem_secret]: " input
       pem_secret="${input:-$pem_secret}"
+      read -rp "Enter value for $pem_secret [default: dummy-pem-content]: " input
+      pem_secret_value="${input:-dummy-pem-content}"
 
       echo "[INFO] Creating AWS secrets and parameters with tags..."
-      create_secret "$secret_aws_key" "dummy-secret-value"
-      create_parameter "$param_access_key" "dummy-access-key"
-      create_secret "$pem_secret" "dummy-pem-content"
+      create_secret "$secret_aws_key" "$secret_aws_value"
+      create_parameter "$param_access_key" "$param_access_value"
+      create_secret "$pem_secret" "$pem_secret_value"
       ;;
 
     2)
